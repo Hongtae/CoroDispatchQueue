@@ -68,6 +68,30 @@ See the example file for more details: [Sample code (test.cpp)](test.cpp)
    - A queue that manages threads. A queue can have multiple threads.
    - See the source code for a detailed implementation.
 
+- TaskGroup
+   - Group object for executing coroutine functions in parallel
+
+- AsyncTaskGroup
+   - Group object for executing coroutine functions in parallel
+   - Runs on a specific dispatch queue and returns to the original dispatch queue when it completes.
+
+## Functions
+- detachTask(AsyncTask<T>)
+- detachTask(Task<T>)
+   - Run the coroutine.
+   - This function can be called in a synchronous context.
+      - This is the entry function that spawns the asynchronous context.
+
+- asyncSleep(double)
+   - Suspends execution for a given amount of time, but does not actually sleep the thread.
+
+- asyncYield()
+   - Yield execution to another coroutine function.
+
+- async(TaskGroup)
+- async(AsyncTaskGroup)
+   - Run a TaskGroup with multiple coroutine functions.
+
 ## Usage
 ```
 // async function using background thread.
