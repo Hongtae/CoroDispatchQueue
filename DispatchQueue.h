@@ -29,6 +29,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <exception>
 
 #ifdef max
 #define _POP_MACRO_MAX
@@ -36,10 +37,14 @@
 #undef max
 #endif
 
+#ifndef CPP_CORO_DISPATCHQUEUE_EXPORT_API
+#define CPP_CORO_DISPATCHQUEUE_EXPORT_API
+#endif
+
 #ifdef CPP_CORO_DISPATCHQUEUE_NAMESPACE
 namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
 #endif
-    class DispatchQueue {
+    class CPP_CORO_DISPATCHQUEUE_EXPORT_API DispatchQueue {
     public:
         DispatchQueue(uint32_t numThreads) noexcept;
         DispatchQueue(DispatchQueue&&) noexcept;
@@ -128,6 +133,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         DispatchQueue& operator = (const DispatchQueue&) = delete;
     };
 
+    CPP_CORO_DISPATCHQUEUE_EXPORT_API
     void setDispatchQueueMainThread();
 
     inline DispatchQueue& dispatchGlobal() noexcept {
@@ -156,7 +162,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
     template <typename T>
     struct _AwaiterContinuation {
         constexpr bool await_ready() const noexcept { return false; }
-        auto await_suspend(std::coroutine_handle<typename T::promise_type> handle) const noexcept {
+        constexpr auto await_suspend(std::coroutine_handle<typename T::promise_type> handle) const noexcept {
             auto continuation = handle.promise().continuation;
             handle.promise().continuation = std::noop_coroutine();
             return continuation;
@@ -166,10 +172,10 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
 
     template <typename T>
     struct _AwaiterCoroutineBase {
-        bool await_ready() const noexcept {
+        constexpr bool await_ready() const noexcept {
             return !handle || handle.done();
         }
-        auto await_suspend(std::coroutine_handle<> awaiting_coroutine) const noexcept {
+        constexpr auto await_suspend(std::coroutine_handle<> awaiting_coroutine) const noexcept {
             handle.promise().continuation = awaiting_coroutine;
             return handle;
         }
@@ -178,22 +184,34 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
 
     template <typename T>
     struct _PromiseBase {
-        std::suspend_always initial_suspend() noexcept { return {}; }
-        auto final_suspend() noexcept {
+        constexpr std::suspend_always initial_suspend() const noexcept {
+            return {}; 
+        }
+        constexpr auto final_suspend() const noexcept {
             return _AwaiterContinuation<T>{};
         }
-        T get_return_object() noexcept {
-            return T{ std::coroutine_handle<T::promise_type>::from_promise((typename T::promise_type&)*this) };
+        constexpr T get_return_object() const noexcept {
+            return T{ std::coroutine_handle<typename T::promise_type>::from_promise((typename T::promise_type&)*this) };
         }
-        void unhandled_exception() { throw; }
+        constexpr void unhandled_exception() noexcept {
+            exception = std::current_exception();
+        }
+        constexpr void rethrow_exception_if_caught() const {
+            if (exception)
+                std::rethrow_exception(exception);
+        }
         std::coroutine_handle<> continuation = std::noop_coroutine();
+        std::exception_ptr exception;
     };
 
+    CPP_CORO_DISPATCHQUEUE_EXPORT_API
     void _threadLocalDeferred(std::function<void()>);
 
     template <typename T>
     struct _AsyncAwaiterDispatchContinuation {
-        constexpr bool await_ready() const noexcept { return false; }
+        constexpr bool await_ready() const noexcept {
+            return false; 
+        }
         std::coroutine_handle<> await_suspend(std::coroutine_handle<typename T::promise_type> handle) const noexcept {
             auto continuation = handle.promise().continuation;
             handle.promise().continuation = {};
@@ -209,12 +227,12 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
             _threadLocalDeferred([=] { target->enqueue(continuation.coroutine); });
             return std::noop_coroutine();
         }
-        constexpr void await_resume() noexcept {}
+        constexpr void await_resume() const noexcept {}
     };
 
     template <typename T>
     struct _AsyncAwaiterDispatchCoroutineBase {
-        bool await_ready() const noexcept {
+        constexpr bool await_ready() const noexcept {
             return !handle || handle.done();
         }
         std::coroutine_handle<> await_suspend(std::coroutine_handle<> awaiting_coroutine) {
@@ -232,30 +250,39 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
 
     template <typename T>
     struct _AsyncPromiseBase {
-        std::suspend_always initial_suspend() noexcept { return {}; }
-        auto final_suspend() noexcept {
+        constexpr std::suspend_always initial_suspend() const noexcept {
+            return {}; 
+        }
+        constexpr auto final_suspend() const noexcept {
             return _AsyncAwaiterDispatchContinuation<T>{};
         }
-        T get_return_object() noexcept {
-            return T{ std::coroutine_handle<T::promise_type>::from_promise((typename T::promise_type&)*this) };
+        constexpr T get_return_object() const noexcept {
+            return T{ std::coroutine_handle<typename T::promise_type>::from_promise((typename T::promise_type&)*this) };
         }
-        void unhandled_exception() { throw; }
+        constexpr void unhandled_exception() noexcept {
+            exception = std::current_exception();
+        }
+        constexpr void rethrow_exception_if_caught() const {
+            if (exception)
+                std::rethrow_exception(exception);
+        }
         struct {
             std::coroutine_handle<> coroutine = std::noop_coroutine();
             std::thread::id threadID = {};
         } continuation;
+        std::exception_ptr exception;
     };
 
     template <typename T = void> struct [[nodiscard]] Task {
         template <typename R> struct _Promise : _PromiseBase<Task> {
             template <std::convertible_to<R> V>
-            void return_value(V&& value) noexcept {
+            constexpr void return_value(V&& value) noexcept {
                 _result.emplace(std::forward<V>(value));
             }
-            std::optional<R> _result;
-            auto&& result() const {
+            constexpr auto&& result() const {
                 return _result.value();
             }
+            std::optional<R> _result;
         };
         template <> struct _Promise<void> : _PromiseBase<Task> {
             constexpr void return_void() const noexcept {}
@@ -266,7 +293,9 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
 
         auto operator co_await() const noexcept {
             struct Awaiter : _AwaiterCoroutineBase<Task> {
-                auto await_resume() -> decltype(handle.promise().result()) const {
+                using _AwaiterCoroutineBase<Task>::handle;
+                constexpr auto await_resume() -> decltype(handle.promise().result()) const {
+                    handle.promise().rethrow_exception_if_caught();
                     return handle.promise().result();
                 }
             };
@@ -310,10 +339,12 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         using Queue = Q;
         template <typename R> struct _Promise : _AsyncPromiseBase<AsyncTask> {
             template <std::convertible_to<R> V>
-            void return_value(V&& value) noexcept {
+            constexpr void return_value(V&& value) noexcept {
                 _result.emplace(std::forward<V>(value));
             }
-            auto&& result() const { return _result.value(); }
+            constexpr auto&& result() const {
+                return _result.value(); 
+            }
             std::optional<R> _result;
         };
         template <> struct _Promise<void> : _AsyncPromiseBase<AsyncTask> {
@@ -325,7 +356,9 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
 
         auto operator co_await() const noexcept {
             struct Awaiter : _AsyncAwaiterDispatchCoroutineBase<AsyncTask> {
-                auto await_resume() -> decltype(handle.promise().result()) const {
+                using _AsyncAwaiterDispatchCoroutineBase<AsyncTask>::handle;
+                constexpr auto await_resume() -> decltype(handle.promise().result()) const {
+                    handle.promise().rethrow_exception_if_caught();
                     return handle.promise().result();
                 }
             };
@@ -370,19 +403,22 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
     struct [[nodiscard]] Generator {
         struct promise_type : _PromiseBase<Generator> {
             template <std::convertible_to<T> R>
-            auto yield_value(R&& v) noexcept {
+            constexpr auto yield_value(R&& v) noexcept {
                 _value.emplace(std::forward<R>(v));
                 return _AwaiterContinuation<Generator>{};
             }
             constexpr void return_void() const noexcept {}
+            constexpr auto&& value() const {
+                return _value.value(); 
+            }
             std::optional<T> _value;
-            auto&& value() const { return _value.value(); }
         };
         std::coroutine_handle<promise_type> handle;
 
         auto operator co_await() const noexcept {
             struct Awaiter : _AwaiterCoroutineBase<Generator> {
-                bool await_resume() const noexcept {
+                constexpr bool await_resume() const {
+                    this->handle.promise().rethrow_exception_if_caught();
                     return this->await_ready() == false;
                 }
             };
@@ -428,7 +464,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         using Queue = Q;
         struct promise_type : _AsyncPromiseBase<AsyncGenerator> {
             template <std::convertible_to<T> R>
-            auto yield_value(R&& v) noexcept {
+            constexpr auto yield_value(R&& v) noexcept {
                 value.emplace(std::forward<R>(v));
                 return _AsyncAwaiterDispatchContinuation<AsyncGenerator>{};
             }
@@ -439,7 +475,8 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
 
         auto operator co_await() const noexcept {
             struct Awaiter : _AsyncAwaiterDispatchCoroutineBase<AsyncGenerator> {
-                bool await_resume() const noexcept {
+                constexpr bool await_resume() const {
+                    this->handle.promise().rethrow_exception_if_caught();
                     return this->await_ready() == false;
                 }
             };
@@ -819,13 +856,14 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         }
     }
 
+    CPP_CORO_DISPATCHQUEUE_EXPORT_API
     void setDispatchQueueMainThread() {
         auto& local = _local::get();
         auto lock = std::unique_lock{ local.mutex };
         local.mainThreadID = std::this_thread::get_id();
         lock.unlock();
     }
-
+    CPP_CORO_DISPATCHQUEUE_EXPORT_API
     void _threadLocalDeferred(std::function<void()> fn) {
         if (fn) {
             auto& local = _local::get();
