@@ -250,7 +250,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         template <typename R> struct _Promise : _PromiseBase<Task> {
             template <std::convertible_to<R> V>
             void return_value(V&& value) noexcept {
-                _result.emplace(std::forward<R>(value));
+                _result.emplace(std::forward<V>(value));
             }
             std::optional<R> _result;
             auto&& result() const {
@@ -311,7 +311,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         template <typename R> struct _Promise : _AsyncPromiseBase<AsyncTask> {
             template <std::convertible_to<R> V>
             void return_value(V&& value) noexcept {
-                _result.emplace(std::forward<R>(value));
+                _result.emplace(std::forward<V>(value));
             }
             auto&& result() const { return _result.value(); }
             std::optional<R> _result;
