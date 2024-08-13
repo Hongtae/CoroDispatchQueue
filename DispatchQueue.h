@@ -126,7 +126,8 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         void shutdown() noexcept;
 
         uint32_t _numThreads;
-        std::vector<std::jthread> _threads;
+        std::atomic_flag _stopRequest;
+        std::vector<std::thread> _threads;
         std::shared_ptr<_Dispatcher> _dispatcher;
 
         DispatchQueue(const DispatchQueue&) = delete;
@@ -210,7 +211,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
     template <typename T>
     struct _AsyncAwaiterDispatchContinuation {
         constexpr bool await_ready() const noexcept {
-            return false; 
+            return false;
         }
         std::coroutine_handle<> await_suspend(std::coroutine_handle<typename T::promise_type> handle) const noexcept {
             auto continuation = handle.promise().continuation;
@@ -417,7 +418,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
 
         auto operator co_await() const noexcept {
             struct Awaiter : _AwaiterCoroutineBase<Generator> {
-                constexpr bool await_resume() const {
+                constexpr bool await_resume() const noexcept {
                     this->handle.promise().rethrow_exception_if_caught();
                     return this->await_ready() == false;
                 }
@@ -475,7 +476,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
 
         auto operator co_await() const noexcept {
             struct Awaiter : _AsyncAwaiterDispatchCoroutineBase<AsyncGenerator> {
-                constexpr bool await_resume() const {
+                constexpr bool await_resume() const noexcept {
                     this->handle.promise().rethrow_exception_if_caught();
                     return this->await_ready() == false;
                 }
@@ -518,7 +519,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
     };
 
     template <AsyncQueue Q>
-    inline auto detachedTask(AsyncTask<void, Q> task) {
+    inline auto detachedTask(AsyncTask<void, Q>&& task) {
         Q::queue().dispatcher()->detach(task.handle);
         task.handle = {};
     }
@@ -600,7 +601,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
 
         auto& tasks = group.tasks;
         auto& queue = Q::queue();
-        std::ranges::for_each(tasks, [&](auto& task) {
+        std::for_each(tasks.begin(), tasks.end(), [&](auto& task) {
             queue.schedule().await_suspend(task.handle);
         });
 
@@ -625,9 +626,8 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
             co_return;
 
         auto& tasks = group.tasks;
-
         auto& queue = Q::queue();
-        std::ranges::for_each(tasks, [&](auto& task) {
+        std::for_each(tasks.begin(), tasks.end(), [&](auto& task) {
             queue.schedule().await_suspend(task.handle);
         });
         while (tasks.empty() == false) {
@@ -752,7 +752,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
                         it->second.clear();
                     }
                 } while (0);
-                std::ranges::for_each(deferred, [](auto&& fn) { fn(); });
+                std::for_each(deferred.begin(), deferred.end(), [](auto&& fn) { fn(); });
                 return fetch;
             }
 
@@ -871,7 +871,7 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
             local.threadLocalDeferred[std::this_thread::get_id()].push_back(fn);
         }
     }
-
+    
     DispatchQueue::DispatchQueue(_mainQueue) noexcept
         : _numThreads(1) {
         this->_dispatcher = std::make_shared<Dispatcher>();
@@ -879,14 +879,14 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         auto lock = std::unique_lock{ local.mutex };
         local.mainDispatcher = this->_dispatcher;
     }
-
+    
     DispatchQueue::DispatchQueue(uint32_t maxThreads) noexcept
         : _numThreads(std::max(maxThreads, 1U)) {
         _dispatcher = std::make_shared<Dispatcher>();
 
-        auto work = [this](std::stop_token token) {
+        auto work = [this]{
             setThreadDispatcher(_dispatcher);
-            while (token.stop_requested() == false) {
+            while (!_stopRequest.test()) {
                 if (_dispatcher->dispatch() == 0)
                     _dispatcher->wait();
             }
@@ -894,19 +894,20 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         };
 
         this->_threads.reserve(_numThreads);
+        this->_stopRequest.clear();
         for (uint32_t i = 0; i < _numThreads; ++i)
-            this->_threads.push_back(std::jthread(work));
+            this->_threads.push_back(std::thread(work));
     }
-
+    
     DispatchQueue::DispatchQueue(DispatchQueue&& tmp) noexcept
-        : _threads(std::move(tmp._threads))
-        , _dispatcher(std::move(tmp._dispatcher))
-        , _numThreads(tmp._numThreads) {
+        : _numThreads(tmp._numThreads)
+        , _threads(std::move(tmp._threads))
+        , _dispatcher(std::move(tmp._dispatcher)) {
         tmp._threads.clear();
         tmp._dispatcher = {};
         tmp._numThreads = 0;
     }
-
+    
     DispatchQueue& DispatchQueue::operator = (DispatchQueue&& tmp) noexcept {
         shutdown();
         this->_threads = std::move(tmp._threads);
@@ -917,11 +918,11 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         tmp._numThreads = 0;
         return *this;
     }
-
+    
     void DispatchQueue::shutdown() noexcept {
         if (_threads.empty() == false) {
-            for (auto& t : _threads)
-                t.request_stop();
+            _stopRequest.test_and_set();
+            _stopRequest.notify_all();
 
             _dispatcher->notify();
 
@@ -932,12 +933,12 @@ namespace CPP_CORO_DISPATCHQUEUE_NAMESPACE {
         _dispatcher = nullptr;
         _numThreads = 0;
     }
-
+    
     DispatchQueue& DispatchQueue::main() noexcept {
         static DispatchQueue queue(_mainQueue{});
         return queue;
     }
-
+    
     DispatchQueue& DispatchQueue::global() noexcept {
         static uint32_t maxThreads =
 #ifdef CPP_CORO_DISPATCHQUEUE_MAX_GLOBAL_THREADS
